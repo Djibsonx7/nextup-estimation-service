@@ -1,3 +1,4 @@
+// src/controllers/estimationController.js
 const estimationService = require('../services/estimationService');
 
 const getEstimate = async (req, res) => {
@@ -30,7 +31,24 @@ const getPersonalizedEstimate = async (req, res) => {
     }
 };
 
+// Nouvelle fonction pour la moyenne glissante
+const getMovingAverage = async (req, res) => {
+    const { queueName } = req.params;
+
+    try {
+        const movingAverage = await estimationService.getMovingAverage(queueName);
+        if (movingAverage !== null) {
+            res.status(200).json({ queueName, movingAverage });
+        } else {
+            res.status(404).json({ message: `No data found for ${queueName}` });
+        }
+    } catch (error) {
+        res.status(500).json({ message: 'Error retrieving moving average', error });
+    }
+};
+
 module.exports = {
     getEstimate,
-    getPersonalizedEstimate
+    getPersonalizedEstimate,
+    getMovingAverage,  // Assurez-vous d'exporter cette fonction
 };

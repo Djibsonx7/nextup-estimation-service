@@ -1,3 +1,6 @@
+// index.js
+// Mise à jour : Aucune mise à jour nécessaire ici, à moins que tu veuilles intégrer la nouvelle route
+
 require('dotenv').config();
 const express = require('express');
 const redisClient = require('./config/redisConfig');
