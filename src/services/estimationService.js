@@ -1,7 +1,46 @@
+// src/services/estimationService.js
+// Mise à jour : Ajout de logs supplémentaires pour capturer la sortie du script Python et assurer que la prédiction est correctement renvoyée dans la réponse HTTP.
+
 const redisClient = require('../config/redisConfig');
 const { promisify } = require('util');
+const { execFile } = require('child_process');
+const path = require('path');
 
 const lrangeAsync = promisify(redisClient.lrange).bind(redisClient);
+
+// Fonction pour charger le modèle Python et faire une prédiction
+const getPrediction = async (features) => {
+    return new Promise((resolve, reject) => {
+        const scriptPath = path.join(__dirname, '../model/predict.py'); // Chemin vers le script Python
+        const featuresStr = JSON.stringify(features); // Conversion des caractéristiques en chaîne JSON
+
+        console.log('Running Python script with features:', featuresStr); // Log des caractéristiques
+
+        execFile('python', [scriptPath, featuresStr], (error, stdout, stderr) => { // Utilisation de "python" pour exécuter le script
+            if (error) {
+                console.error('Error executing Python script:', error); // Log des erreurs
+                return reject(`Error executing script: ${error.message}`);
+            }
+            if (stderr) {
+                console.error('Python script stderr:', stderr); // Log de la sortie d'erreur du script Python
+            }
+
+            console.log('Python script output (before parsing):', stdout); // Log de la sortie du script Python avant traitement
+
+            // Supposons que la sortie soit un nombre
+            const prediction = parseFloat(stdout.trim());
+
+            // Log pour vérifier le type et la valeur
+            console.log('Parsed prediction:', prediction, 'Type:', typeof prediction);
+
+            if (isNaN(prediction)) {
+                return reject('Invalid prediction value received from Python script');
+            }
+
+            resolve(prediction);
+        });
+    });
+};
 
 const getMovingAverage = async (queueName) => {
     const key = `wait_times:${queueName}`;
@@ -52,4 +91,5 @@ module.exports = {
     getMovingAverage,
     getEstimate,
     getPersonalizedEstimate,
+    getPrediction,  // Export de la nouvelle fonction getPrediction
 };

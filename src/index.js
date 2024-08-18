@@ -1,5 +1,5 @@
-// index.js
-// Mise à jour : Aucune mise à jour nécessaire ici, à moins que tu veuilles intégrer la nouvelle route
+// src/index.js
+// Mise à jour : Ajout des routes pour Queue History et User
 
 require('dotenv').config();
 const express = require('express');
@@ -23,6 +23,14 @@ app.get('/', (req, res) => {
 // Inclure les routes d'estimation
 const estimationRoutes = require('./routes/estimationRoutes');
 app.use('/api/estimation', estimationRoutes);
+
+// Inclure les routes pour Queue History
+const queueHistoryRoutes = require('./routes/queueHistoryRoutes');
+app.use('/api', queueHistoryRoutes);
+
+// Inclure les routes pour User
+const userRoutes = require('./routes/userRoutes');
+app.use('/api', userRoutes);
 
 const server = app.listen(port, () => {
     console.log(`Server is running on port ${port}`);
