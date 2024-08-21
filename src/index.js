@@ -1,10 +1,12 @@
 // src/index.js
 // Mise à jour : Ajout des routes pour Queue History et User
+// et ajout de la route pour la simulation de l'arrivée des clients.
 
 require('dotenv').config();
 const express = require('express');
 const redisClient = require('./config/redisConfig');
 const { connectDB } = require('./config/mongoConfig'); // Importation de connectDB
+const { simulateClientArrival } = require('./services/estimationService'); // Importation de la simulation des arrivées clients
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -31,6 +33,9 @@ app.use('/api', queueHistoryRoutes);
 // Inclure les routes pour User
 const userRoutes = require('./routes/userRoutes');
 app.use('/api', userRoutes);
+
+// Lancer la simulation des arrivées clients
+simulateClientArrival();
 
 const server = app.listen(port, () => {
     console.log(`Server is running on port ${port}`);

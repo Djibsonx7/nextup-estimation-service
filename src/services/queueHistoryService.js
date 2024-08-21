@@ -1,4 +1,5 @@
 // src/services/queueHistoryService.js
+// Mise à jour : Ajout de la fonction saveClientState pour enregistrer les états des clients et le temps passé.
 
 const QueueHistory = require('../models/queueHistoryModel');
 
@@ -26,4 +27,24 @@ const getAllQueueHistories = async () => {
     }
 };
 
-module.exports = { getQueueHistory, getAllQueueHistories };
+// Fonction pour enregistrer l'état d'un client dans l'historique
+const saveClientState = async (queueName, clientId, status, timeSpent) => {
+    try {
+        const newHistory = new QueueHistory({
+            queueName,
+            userId: clientId,
+            status,
+            timeSpent,
+        });
+        await newHistory.save();
+        console.log(`Client state saved for ${clientId} in ${queueName} with status ${status} and timeSpent ${timeSpent} minutes.`);
+    } catch (error) {
+        console.error('Error saving client state to MongoDB:', error);
+    }
+};
+
+module.exports = { 
+    getQueueHistory, 
+    getAllQueueHistories,
+    saveClientState  // Export de la nouvelle fonction saveClientState
+};
