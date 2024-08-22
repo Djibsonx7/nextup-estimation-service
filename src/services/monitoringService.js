@@ -1,5 +1,5 @@
 // src/services/monitoringService.js
-// Mise à jour : Corrections mineures et gestion des logs de complétion.
+// Mise à jour : Ajout du log pour le temps passé dans la file d'attente avant le début du service.
 
 const redisClient = require('../config/redisConfig');
 const QueueHistory = require('../models/queueHistoryModel');
@@ -102,6 +102,11 @@ const logClientArrival = (clientId, serviceType, arrivalTime, waitTime) => {
     console.log(`Client ${clientId} arrived for ${serviceType} at ${new Date(arrivalTime).toLocaleTimeString()}. Estimated wait time: ${waitTime} minutes.`);
 };
 
+const logTimeSpentInQueue = (clientId, serviceType, arrivalTime, startTime) => {
+    const waitTimeInQueue = ((startTime - arrivalTime) / 60000).toFixed(2); // Convert milliseconds to minutes
+    console.log(`Client ${clientId} a passé ${waitTimeInQueue} minutes dans la file d'attente avant de commencer ${serviceType}.`);
+};
+
 module.exports = {
     collectAndStoreData,
     generateReports,
@@ -110,5 +115,6 @@ module.exports = {
     logClientCompletion,
     logWaitTimeAdjustment,
     logClientStateUpdate,
-    logClientArrival
+    logClientArrival,
+    logTimeSpentInQueue // Export de la nouvelle fonction
 };
