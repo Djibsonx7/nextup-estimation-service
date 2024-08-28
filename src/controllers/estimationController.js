@@ -31,24 +31,24 @@ const getPersonalizedEstimate = async (req, res) => {
     }
 };
 
-// Nouvelle fonction pour la moyenne glissante
-const getMovingAverage = async (req, res) => {
+// Mise à jour de la fonction pour la moyenne exponentielle (EMA)
+const getEMA = async (req, res) => {
     const { queueName } = req.params;
 
     try {
-        const movingAverage = await estimationService.getMovingAverage(queueName);
-        if (movingAverage !== null) {
-            res.status(200).json({ queueName, movingAverage });
+        const ema = await estimationService.getEMA(queueName);
+        if (ema !== null) {
+            res.status(200).json({ queueName, ema });
         } else {
             res.status(404).json({ message: `No data found for ${queueName}` });
         }
     } catch (error) {
-        res.status(500).json({ message: 'Error retrieving moving average', error });
+        res.status(500).json({ message: 'Error retrieving EMA', error });
     }
 };
 
 module.exports = {
     getEstimate,
     getPersonalizedEstimate,
-    getMovingAverage,  // Assurez-vous d'exporter cette fonction
+    getEMA,  // Assurez-vous d'exporter cette fonction
 };

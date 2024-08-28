@@ -17,7 +17,7 @@ router.get('/estimate/:queueName', estimationController.getEstimate);
 router.get('/estimate/:queueName/:userId', estimationController.getPersonalizedEstimate);
 
 // Route pour obtenir la moyenne glissante des temps d'attente
-router.get('/moving-average/:queueName', estimationController.getMovingAverage);
+router.get('/moving-average/:queueName', estimationController.getEMA);
 
 // Route POST pour obtenir une prédiction basée sur le modèle de régression linéaire
 router.post('/prediction', async (req, res) => {

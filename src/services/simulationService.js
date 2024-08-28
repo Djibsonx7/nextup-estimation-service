@@ -1,8 +1,6 @@
 /**
  * Simulation Service
- * Mise à jour effectuée :
- * 1. Optimisation des logs pour l'état de la file d'attente.
- * 2. Mise à jour de l'état de la file d'attente uniquement pour les événements clés (abandon, début de service, arrivée de client).
+ * Ce service gère la simulation des arrivées de clients, la gestion des files d'attente et le traitement des clients.
  */
 
 const redisClient = require('../config/redisConfig');
@@ -15,6 +13,8 @@ const getAsync = promisify(redisClient.get).bind(redisClient);
 const setAsync = promisify(redisClient.set).bind(redisClient);
 const incrAsync = promisify(redisClient.incr).bind(redisClient);
 const decrAsync = promisify(redisClient.decr).bind(redisClient);
+const lpushAsync = promisify(redisClient.lpush).bind(redisClient);
+const rpopAsync = promisify(redisClient.rpop).bind(redisClient);
 
 // Fonction pour générer un temps aléatoire basé sur la distribution de Poisson
 const poissonRandom = (lambda) => {
@@ -42,11 +42,9 @@ const serviceTimeRanges = {
     'consultation': { min: 5, max: 10 }    
 };
 
-// Réduire le nombre de clients simultanés pour éviter la surcharge
 const maxConcurrentClients = 5;
 let activeClients = 0;
 
-// Fonction pour calculer le temps d'attente en fonction de la longueur de la file d'attente et du type de service
 const calculateWaitTime = (queueLength, serviceType) => {
     const timeRange = serviceTimeRanges[serviceType];
     let baseTime = Math.floor(Math.random() * (timeRange.max - timeRange.min + 1)) + timeRange.min;
@@ -59,7 +57,6 @@ const calculateWaitTime = (queueLength, serviceType) => {
     return baseTime * queueLength + baseTime;
 };
 
-// Fonction pour générer un temps de service réaliste
 const generateServiceTime = (serviceType) => {
     const timeRange = serviceTimeRanges[serviceType];
     const serviceTime = Math.floor(Math.random() * (timeRange.max - timeRange.min + 1)) + timeRange.min;
@@ -67,7 +64,79 @@ const generateServiceTime = (serviceType) => {
     return serviceTime;
 };
 
-// Fonction pour simuler l'arrivée des clients de manière asynchrone et dynamique
+const processNextClient = async (serviceType) => {
+    const inProgressKey = `in_progress:${serviceType}`;
+    const queueKey = `queue:${serviceType}`;
+    const inProgressCount = parseInt(await getAsync(inProgressKey)) || 0;
+
+    if (inProgressCount >= maxConcurrentClients) {
+        console.log(`[INFO] Limite de clients simultanés atteinte pour ${serviceType}.`);
+        return;
+    }
+
+    const nextClientData = await rpopAsync(queueKey);
+
+    if (nextClientData) {
+        const { clientId, timestamp } = JSON.parse(nextClientData);
+        console.log(`[DEBUG] Client récupéré de la file d'attente: ${clientId} pour ${serviceType}`);
+
+        // Récupérer l'heure d'arrivée du client
+        const arrivalTime = await getAsync(`arrival_time:${clientId}`);
+        const serviceStartTime = Date.now();
+
+        // Calculer le temps passé dans la file d'attente
+        const waitTimeInQueue = (serviceStartTime - arrivalTime) / 1000 / 60;
+
+        console.log(`[INFO] Service commencé pour ${clientId} dans ${serviceType} à ${new Date(serviceStartTime).toLocaleTimeString()} (in_progress).`);
+
+        monitoringService.logTimeSpentInQueue(clientId, serviceType, arrivalTime, serviceStartTime);
+        await clientService.updateClientState(clientId, {
+            serviceType,
+            status: 'in_progress',
+            serviceStartTime,
+            waitTimeInQueue: waitTimeInQueue.toFixed(2),
+        });
+
+        // Enregistrer le temps d'attente dans Redis pour le calcul de la moyenne glissante
+        await lpushAsync(`wait_times:${serviceType}`, waitTimeInQueue.toFixed(2));
+
+        // Décrémenter la longueur de la file d'attente
+        const updatedQueueLength = await decrAsync(`queue_length:${serviceType}`);
+        console.log(`[INFO] Longueur de la file d'attente pour ${serviceType} après décrémentation: ${updatedQueueLength} clients.`);
+
+        const newInProgressCount = await incrAsync(inProgressKey);
+        console.log(`[INFO] Nombre de clients en cours pour ${serviceType} : ${newInProgressCount}`);
+
+        const serviceTime = generateServiceTime(serviceType);
+
+        setTimeout(async () => {
+            const serviceEndTime = Date.now();
+            const timeSpent = (serviceEndTime - serviceStartTime) / 1000 / 60;
+
+            console.log(`[INFO] Service terminé pour ${clientId} dans ${serviceType} à ${new Date(serviceEndTime).toLocaleTimeString()}. Temps passé : ${timeSpent.toFixed(2)} minutes (completed).`);
+
+            await clientService.updateClientState(clientId, {
+                serviceType,
+                status: 'completed',
+                timeSpent,
+            });
+
+            await monitoringService.logClientCompletion(clientId, serviceType, timeSpent);
+
+            const finalInProgressCount = await decrAsync(inProgressKey);
+            console.log(`[INFO] Nombre de clients en cours pour ${serviceType} après décrementation : ${finalInProgressCount}`);
+
+            // Introduire un léger délai avant de traiter le prochain client
+            setTimeout(() => {
+                processNextClient(serviceType);
+            }, 1000); // Délai de 1 seconde avant de démarrer le prochain client
+
+        }, serviceTime * 60000);
+    } else {
+        console.log(`[DEBUG] Aucun client dans la file d'attente pour ${serviceType}`);
+    }
+};
+
 const simulateClientArrival = async () => {
     const serviceTypes = Object.keys(serviceArrivalRate);
 
@@ -88,6 +157,7 @@ const simulateClientArrival = async () => {
                 const currentTime = Date.now();
 
                 const queueLengthKey = `queue_length:${serviceType}`;
+                const inProgressKey = `in_progress:${serviceType}`;
                 let currentQueueLength = await getAsync(queueLengthKey) || 0;
                 currentQueueLength = parseInt(currentQueueLength, 10);
 
@@ -99,74 +169,44 @@ const simulateClientArrival = async () => {
 
                 let waitTime = calculateWaitTime(currentQueueLength, serviceType);
 
-                if (Math.random() < 0.1 && currentQueueLength > 0) {  
+                if (Math.random() < 0.1 && currentQueueLength > 0) {
                     monitoringService.logClientStateUpdate(clientId, serviceType, 'abandoned');
                     await decrAsync(queueLengthKey);
-                    // Mise à jour de la file d'attente après l'abandon
-                    const updatedQueueLength = await getAsync(queueLengthKey);
-                    console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${updatedQueueLength} clients.`);
+                    console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${currentQueueLength - 1} clients.`);
                     return;
                 }
 
                 monitoringService.logClientArrival(clientId, serviceType, currentTime, waitTime);
-                await incrAsync(queueLengthKey);
-                // Mise à jour de la file d'attente après l'arrivée d'un client
-                const updatedQueueLengthArrival = await getAsync(queueLengthKey);
-                console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${updatedQueueLengthArrival} clients.`);
 
-                if (Math.random() < 0.2) {  
-                    const originalWaitTime = waitTime;
-                    const adjustment = Math.floor(Math.random() * 10) - 5;
-                    waitTime = Math.max(waitTime + adjustment, 1);
-                    monitoringService.logWaitTimeAdjustment(clientId, serviceType, originalWaitTime, waitTime);
+                // Ajout du client dans la file d'attente avec un timestamp distinct pour garantir le FIFO
+                await lpushAsync(`queue:${serviceType}`, JSON.stringify({ clientId, timestamp: currentTime }));
+                await incrAsync(queueLengthKey);
+
+                // Stocker l'heure d'arrivée du client
+                await setAsync(`arrival_time:${clientId}`, currentTime);
+
+                let inProgressCount = await getAsync(inProgressKey);
+                if (inProgressCount === null) {
+                    await setAsync(inProgressKey, 0);
+                    inProgressCount = 0;
+                } else {
+                    inProgressCount = parseInt(inProgressCount, 10);
                 }
 
-                // Pause avant de commencer le service pour simuler un délai réel
-                await new Promise(resolve => setTimeout(resolve, waitTime * 1000));  // Pause correspondant au temps d'attente
+                if (inProgressCount === 0) {
+                    console.log(`[DEBUG] Aucun client en cours pour ${serviceType}, démarrage du prochain client.`);
+                    processNextClient(serviceType);
+                } else {
+                    console.log(`[DEBUG] Clients en cours pour ${serviceType} : ${inProgressCount}`);
+                }
 
-                const serviceStartTime = Date.now();
-                console.log(`[INFO] Service commencé pour ${clientId} dans ${serviceType} à ${new Date(serviceStartTime).toLocaleTimeString()} (in_progress).`);
+                console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${currentQueueLength + 1} clients.`);
 
-                monitoringService.logTimeSpentInQueue(clientId, serviceType, currentTime, serviceStartTime);
-
-                await clientService.updateClientState(clientId, {
-                    serviceType,
-                    waitTime,
-                    status: 'in_progress',
-                    arrivalTime: currentTime,
-                    serviceStartTime,
-                });
-
-                const serviceTime = generateServiceTime(serviceType);
-
-                setTimeout(async () => {
-                    const serviceEndTime = Date.now();  
-                    const timeSpent = (serviceEndTime - serviceStartTime) / 1000 / 60;
-
-                    console.log(`[INFO] Service terminé pour ${clientId} dans ${serviceType} à ${new Date(serviceEndTime).toLocaleTimeString()}. Temps passé : ${timeSpent.toFixed(2)} minutes (completed).`);
-
-                    await clientService.updateClientState(clientId, {
-                        serviceType,
-                        waitTime,
-                        status: 'completed',
-                        timeSpent,
-                        arrivalTime: currentTime,
-                        completionTime: serviceEndTime,
-                    });
-
-                    await monitoringService.logClientCompletion(clientId, serviceType, timeSpent);
-
-                    await decrAsync(queueLengthKey);
-                    // Mise à jour de la file d'attente après le passage en état completed
-                    const updatedQueueLengthCompleted = await getAsync(queueLengthKey);
-                    console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${updatedQueueLengthCompleted} clients.`);
-
-                }, serviceTime * 60000);  // Le temps de service est maintenant réellement simulé dans les minutes spécifiées
             } finally {
                 activeClients--;
                 simulateClientArrival();
             }
-        }, timeUntilNextArrival * 2000);  // Augmenter l'intervalle entre les arrivées pour espacer les clients
+        }, timeUntilNextArrival * 2000);
     }
 };
 

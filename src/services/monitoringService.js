@@ -1,5 +1,6 @@
 // src/services/monitoringService.js
-// Mise à jour : Ajout du log pour le temps passé dans la file d'attente avant le début du service.
+// Mise à jour : Ajout du log pour le temps passé dans la file d'attente avant le début du service
+// et stockage correct du temps d'attente (waitTimeInQueue) ainsi que du temps de traitement (timeSpent) dans MongoDB.
 
 const redisClient = require('../config/redisConfig');
 const QueueHistory = require('../models/queueHistoryModel');
@@ -9,12 +10,13 @@ const { promisify } = require('util');
 const getAsync = promisify(redisClient.get).bind(redisClient);
 const lrangeAsync = promisify(redisClient.lrange).bind(redisClient);
 
-const collectAndStoreData = async (serviceType, clientId, status, waitTime) => {
+const collectAndStoreData = async (serviceType, clientId, status, waitTimeInQueue, timeSpent) => {
     try {
         const queueHistory = new QueueHistory({
             queueName: serviceType,
             userId: clientId,
-            waitTime: waitTime,
+            waitTime: waitTimeInQueue, // Stocker le temps d'attente avant d'être servi
+            timeSpent: timeSpent, // Stocker le temps de traitement
             status: status
         });
         await queueHistory.save();
@@ -31,6 +33,7 @@ const generateReports = async (serviceType) => {
             const report = {
                 totalClients: history.length,
                 averageWaitTime: history.reduce((acc, record) => acc + record.waitTime, 0) / history.length,
+                averageTimeSpent: history.reduce((acc, record) => acc + record.timeSpent, 0) / history.length,
                 completedClients: history.filter(record => record.status === 'completed').length,
                 abandonedClients: history.filter(record => record.status === 'abandoned').length,
             };
@@ -87,7 +90,8 @@ const optimizeRealTime = async (serviceType) => {
 
 const logClientCompletion = async (clientId, serviceType, timeSpent) => {
     console.log(`Client ${clientId} completed ${serviceType} in ${timeSpent} minutes.`);
-    await collectAndStoreData(serviceType, clientId, 'completed', timeSpent);
+    const waitTimeInQueue = await getAsync(`wait_time_in_queue:${clientId}`); // Récupérer le temps d'attente
+    await collectAndStoreData(serviceType, clientId, 'completed', waitTimeInQueue, timeSpent); // Utiliser le temps d'attente et le temps de traitement
 };
 
 const logWaitTimeAdjustment = (clientId, serviceType, originalWaitTime, adjustedWaitTime) => {
@@ -105,6 +109,9 @@ const logClientArrival = (clientId, serviceType, arrivalTime, waitTime) => {
 const logTimeSpentInQueue = (clientId, serviceType, arrivalTime, startTime) => {
     const waitTimeInQueue = ((startTime - arrivalTime) / 60000).toFixed(2); // Convert milliseconds to minutes
     console.log(`Client ${clientId} a passé ${waitTimeInQueue} minutes dans la file d'attente avant de commencer ${serviceType}.`);
+
+    // Stocker le temps d'attente en attente pour être utilisé lors de la finalisation du client
+    redisClient.set(`wait_time_in_queue:${clientId}`, waitTimeInQueue);
 };
 
 module.exports = {

@@ -1,6 +1,7 @@
 // src/services/queueHistoryService.js
-// Mise à jour : Ajout de la fonction saveClientState pour enregistrer les états des clients et le temps passé.
+// Mise à jour : Stockage à la fois du temps d'attente (waitTimeInQueue) et du temps de traitement (timeSpent) dans MongoDB.
 
+const redisClient = require('../config/redisConfig');
 const QueueHistory = require('../models/queueHistoryModel');
 
 // Fonction pour récupérer l'historique d'une file d'attente
@@ -28,16 +29,25 @@ const getAllQueueHistories = async () => {
 };
 
 // Fonction pour enregistrer l'état d'un client dans l'historique
-const saveClientState = async (queueName, clientId, status, timeSpent) => {
+const saveClientState = async (queueName, clientId, status) => {
     try {
+        const waitTimeInQueue = await redisClient.get(`wait_time_in_queue:${clientId}`); // Récupérer le temps d'attente
+        const timeSpent = await redisClient.get(`time_spent:${clientId}`); // Récupérer le temps de traitement
         const newHistory = new QueueHistory({
             queueName,
             userId: clientId,
             status,
-            timeSpent,
+            waitTime: waitTimeInQueue, // Utiliser le temps d'attente
+            timeSpent: timeSpent, // Stocker le temps de traitement
         });
         await newHistory.save();
-        console.log(`Client state saved for ${clientId} in ${queueName} with status ${status} and timeSpent ${timeSpent} minutes.`);
+        console.log(`Client state saved for ${clientId} in ${queueName} with status ${status}, waitTime ${waitTimeInQueue} minutes, and timeSpent ${timeSpent} minutes.`);
+
+        // Enregistrer le temps d'attente et le temps de traitement dans Redis pour le calcul de la moyenne mobile
+        await redisClient.lpush(`wait_times:${queueName}`, waitTimeInQueue);
+        await redisClient.lpush(`time_spent:${queueName}`, timeSpent);
+        console.log(`Wait time (${waitTimeInQueue} minutes) and time spent (${timeSpent} minutes) recorded for ${clientId} in Redis for service ${queueName}.`);
+
     } catch (error) {
         console.error('Error saving client state to MongoDB:', error);
     }

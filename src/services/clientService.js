@@ -1,4 +1,6 @@
 // src/services/clientService.js
+// Mise à jour : Ajout de vérifications pour garantir que timeSpent est bien enregistré dans Redis
+// et ajout de l'enregistrement de timeSpent dans une liste Redis pour les calculs futurs.
 
 const redisClient = require('../config/redisConfig');
 const monitoringService = require('./monitoringService');
@@ -21,34 +23,19 @@ const updateClientState = async (clientId, stateInfo) => {
         }
         if (stateInfo.timeSpent) {
             await redisClient.set(`client:${clientId}:timeSpent`, stateInfo.timeSpent);
+
+            // Ajout dans une liste Redis pour calculer la moyenne mobile sur le temps de service
+            await redisClient.lpush(`timeSpent:${stateInfo.serviceType}`, stateInfo.timeSpent);
+            console.log(`Time spent (${stateInfo.timeSpent} minutes) enregistré pour ${clientId} dans le service ${stateInfo.serviceType}`);
         }
 
-        // Sauvegarde dans MongoDB uniquement pour le statut "completed"
-        if (stateInfo.status === 'completed') {
-            await saveClientStateToHistory({
-                clientId,
-                serviceType: stateInfo.serviceType,
-                status: stateInfo.status,
-                waitTime: stateInfo.waitTime,
-                timeSpent: stateInfo.timeSpent
-            });
-        }
+        // On ne sauvegarde plus directement dans MongoDB ici pour éviter les doublons
 
     } catch (error) {
         console.error(`Error updating client state for ${clientId}:`, error);
     }
 };
 
-// Fonction pour sauvegarder l'état du client dans l'historique MongoDB
-const saveClientStateToHistory = async (stateInfo) => {
-    try {
-        await monitoringService.collectAndStoreData(stateInfo.serviceType, stateInfo.clientId, stateInfo.status, stateInfo.timeSpent);
-    } catch (error) {
-        console.error(`Error saving client state to history for ${stateInfo.clientId}:`, error);
-    }
-};
-
 module.exports = {
-    updateClientState,
-    saveClientStateToHistory
+    updateClientState
 };
