@@ -12,7 +12,8 @@ const queueHistorySchema = new mongoose.Schema({
         enum: ['en_cours', 'termine', 'annule', 'in_progress', 'completed', 'abandoned'], // Ajout des valeurs anglaises
         required: true 
     }, // Statut du client (en cours, terminé, annulé, in progress, completed, abandoned)
-    timeSpent: { type: Number, required: false } // Temps passé pour le service (optionnel, ajouté lorsque le service est terminé)
+    timeSpent: { type: Number, required: false }, // Temps passé pour le service (optionnel, ajouté lorsque le service est terminé)
+    queueLength: { type: Number, required: true } // Longueur de la file d'attente lors de l'arrivée du client
 });
 
 const QueueHistory = mongoose.model('QueueHistory', queueHistorySchema);

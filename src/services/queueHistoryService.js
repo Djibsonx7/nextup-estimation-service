@@ -1,5 +1,6 @@
 // src/services/queueHistoryService.js
-// Mise à jour : Stockage à la fois du temps d'attente (waitTimeInQueue) et du temps de traitement (timeSpent) dans MongoDB.
+// Mise à jour : Stockage à la fois du temps d'attente (waitTimeInQueue), du temps de traitement (timeSpent),
+// et de la longueur de la file d'attente (queueLength) dans MongoDB.
 
 const redisClient = require('../config/redisConfig');
 const QueueHistory = require('../models/queueHistoryModel');
@@ -33,15 +34,19 @@ const saveClientState = async (queueName, clientId, status) => {
     try {
         const waitTimeInQueue = await redisClient.get(`wait_time_in_queue:${clientId}`); // Récupérer le temps d'attente
         const timeSpent = await redisClient.get(`time_spent:${clientId}`); // Récupérer le temps de traitement
+        const queueLength = await redisClient.get(`queue_length:${clientId}`); // Récupérer la longueur de la file d'attente
+
         const newHistory = new QueueHistory({
             queueName,
             userId: clientId,
             status,
             waitTime: waitTimeInQueue, // Utiliser le temps d'attente
             timeSpent: timeSpent, // Stocker le temps de traitement
+            queueLength: queueLength // Stocker la longueur de la file d'attente
         });
+
         await newHistory.save();
-        console.log(`Client state saved for ${clientId} in ${queueName} with status ${status}, waitTime ${waitTimeInQueue} minutes, and timeSpent ${timeSpent} minutes.`);
+        console.log(`Client state saved for ${clientId} in ${queueName} with status ${status}, waitTime ${waitTimeInQueue} minutes, timeSpent ${timeSpent} minutes, and queueLength ${queueLength}.`);
 
         // Enregistrer le temps d'attente et le temps de traitement dans Redis pour le calcul de la moyenne mobile
         await redisClient.lpush(`wait_times:${queueName}`, waitTimeInQueue);

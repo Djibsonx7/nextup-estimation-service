@@ -1,6 +1,8 @@
 /**
  * Simulation Service
  * Ce service gère la simulation des arrivées de clients, la gestion des files d'attente et le traitement des clients.
+ * Mise à jour : Capture et stockage de `queueLength` lors de l'arrivée des clients, et récupération lors du traitement des clients.
+ * Ajout : Régulation des arrivées pour éviter les arrivées simultanées.
  */
 
 const redisClient = require('../config/redisConfig');
@@ -16,7 +18,26 @@ const decrAsync = promisify(redisClient.decr).bind(redisClient);
 const lpushAsync = promisify(redisClient.lpush).bind(redisClient);
 const rpopAsync = promisify(redisClient.rpop).bind(redisClient);
 
-// Fonction pour générer un temps aléatoire basé sur la distribution de Poisson
+// Définir les taux d'arrivée pour chaque type de service
+const serviceArrivalRate = {
+    'deposit': 10,
+    'withdrawal': 8,
+    'consultation': 5
+};
+
+// Plages de temps d'attente pour chaque type de service
+const serviceTimeRanges = {
+    'deposit': { min: 1, max: 5 },
+    'withdrawal': { min: 2, max: 7 },
+    'consultation': { min: 5, max: 10 }
+};
+
+const maxConcurrentClients = 5;
+let activeClients = 0;
+let lastArrivalTime = 0; // Timestamp de la dernière arrivée
+const minArrivalInterval = 1000; // 1 seconde minimum entre les arrivées
+
+// Générer un temps d'arrivée aléatoire basé sur une distribution de Poisson
 const poissonRandom = (lambda) => {
     let L = Math.exp(-lambda);
     let k = 0;
@@ -28,23 +49,7 @@ const poissonRandom = (lambda) => {
     return k - 1;
 };
 
-// Définir les taux d'arrivée pour chaque type de service
-const serviceArrivalRate = {
-    'deposit': 10,
-    'withdrawal': 8,
-    'consultation': 5
-};
-
-// Plages de temps d'attente pour chaque type de service
-const serviceTimeRanges = {
-    'deposit': { min: 1, max: 5 },         
-    'withdrawal': { min: 2, max: 7 },      
-    'consultation': { min: 5, max: 10 }    
-};
-
-const maxConcurrentClients = 5;
-let activeClients = 0;
-
+// Calculer le temps d'attente basé sur la longueur de la file et le type de service
 const calculateWaitTime = (queueLength, serviceType) => {
     const timeRange = serviceTimeRanges[serviceType];
     let baseTime = Math.floor(Math.random() * (timeRange.max - timeRange.min + 1)) + timeRange.min;
@@ -57,13 +62,22 @@ const calculateWaitTime = (queueLength, serviceType) => {
     return baseTime * queueLength + baseTime;
 };
 
+// Générer un temps de service aléatoire basé sur le type de service
 const generateServiceTime = (serviceType) => {
     const timeRange = serviceTimeRanges[serviceType];
-    const serviceTime = Math.floor(Math.random() * (timeRange.max - timeRange.min + 1)) + timeRange.min;
-
-    return serviceTime;
+    return Math.floor(Math.random() * (timeRange.max - timeRange.min + 1)) + timeRange.min;
 };
 
+// Mettre à jour la longueur de la file d'attente
+const updateQueueLength = async (queueKey, action = 'incr') => {
+    if (action === 'incr') {
+        return await incrAsync(queueKey);
+    } else if (action === 'decr') {
+        return await decrAsync(queueKey);
+    }
+};
+
+// Traiter le prochain client dans la file d'attente
 const processNextClient = async (serviceType) => {
     const inProgressKey = `in_progress:${serviceType}`;
     const queueKey = `queue:${serviceType}`;
@@ -77,14 +91,11 @@ const processNextClient = async (serviceType) => {
     const nextClientData = await rpopAsync(queueKey);
 
     if (nextClientData) {
-        const { clientId, timestamp } = JSON.parse(nextClientData);
+        const { clientId, timestamp, queueLength } = JSON.parse(nextClientData);
         console.log(`[DEBUG] Client récupéré de la file d'attente: ${clientId} pour ${serviceType}`);
 
-        // Récupérer l'heure d'arrivée du client
         const arrivalTime = await getAsync(`arrival_time:${clientId}`);
         const serviceStartTime = Date.now();
-
-        // Calculer le temps passé dans la file d'attente
         const waitTimeInQueue = (serviceStartTime - arrivalTime) / 1000 / 60;
 
         console.log(`[INFO] Service commencé pour ${clientId} dans ${serviceType} à ${new Date(serviceStartTime).toLocaleTimeString()} (in_progress).`);
@@ -95,19 +106,14 @@ const processNextClient = async (serviceType) => {
             status: 'in_progress',
             serviceStartTime,
             waitTimeInQueue: waitTimeInQueue.toFixed(2),
+            queueLength
         });
 
-        // Enregistrer le temps d'attente dans Redis pour le calcul de la moyenne glissante
         await lpushAsync(`wait_times:${serviceType}`, waitTimeInQueue.toFixed(2));
-
-        // Décrémenter la longueur de la file d'attente
-        const updatedQueueLength = await decrAsync(`queue_length:${serviceType}`);
-        console.log(`[INFO] Longueur de la file d'attente pour ${serviceType} après décrémentation: ${updatedQueueLength} clients.`);
+        await updateQueueLength(`queue_length:${serviceType}`, 'decr');
 
         const newInProgressCount = await incrAsync(inProgressKey);
         console.log(`[INFO] Nombre de clients en cours pour ${serviceType} : ${newInProgressCount}`);
-
-        const serviceTime = generateServiceTime(serviceType);
 
         setTimeout(async () => {
             const serviceEndTime = Date.now();
@@ -121,22 +127,20 @@ const processNextClient = async (serviceType) => {
                 timeSpent,
             });
 
-            await monitoringService.logClientCompletion(clientId, serviceType, timeSpent);
+            await monitoringService.logClientCompletion(clientId, serviceType, timeSpent, queueLength);
 
-            const finalInProgressCount = await decrAsync(inProgressKey);
-            console.log(`[INFO] Nombre de clients en cours pour ${serviceType} après décrementation : ${finalInProgressCount}`);
-
-            // Introduire un léger délai avant de traiter le prochain client
+            await decrAsync(inProgressKey);
             setTimeout(() => {
                 processNextClient(serviceType);
-            }, 1000); // Délai de 1 seconde avant de démarrer le prochain client
+            }, 1000);
 
-        }, serviceTime * 60000);
+        }, generateServiceTime(serviceType) * 60000);
     } else {
         console.log(`[DEBUG] Aucun client dans la file d'attente pour ${serviceType}`);
     }
 };
 
+// Simuler l'arrivée des clients
 const simulateClientArrival = async () => {
     const serviceTypes = Object.keys(serviceArrivalRate);
 
@@ -148,65 +152,58 @@ const simulateClientArrival = async () => {
 
         activeClients++;
         const serviceType = serviceTypes[Math.floor(Math.random() * serviceTypes.length)];
-        const arrivalRate = serviceArrivalRate[serviceType];
-        const timeUntilNextArrival = poissonRandom(arrivalRate);
+        const timeUntilNextArrival = poissonRandom(serviceArrivalRate[serviceType]) * 2000;
 
         setTimeout(async () => {
+            const currentTime = Date.now();
+            const timeSinceLastArrival = currentTime - lastArrivalTime;
+
+            if (timeSinceLastArrival < minArrivalInterval) {
+                await new Promise(resolve => setTimeout(resolve, minArrivalInterval - timeSinceLastArrival));
+            }
+
             try {
                 const clientId = `client${Math.floor(Math.random() * 1000)}`;
-                const currentTime = Date.now();
+                lastArrivalTime = Date.now(); // Mettre à jour le dernier temps d'arrivée
 
                 const queueLengthKey = `queue_length:${serviceType}`;
-                const inProgressKey = `in_progress:${serviceType}`;
-                let currentQueueLength = await getAsync(queueLengthKey) || 0;
-                currentQueueLength = parseInt(currentQueueLength, 10);
+                let currentQueueLength = parseInt(await getAsync(queueLengthKey)) || 0;
 
                 if (isNaN(currentQueueLength)) {
-                    console.warn(`Longueur de la file d'attente invalide pour ${serviceType}: ${currentQueueLength}. Réinitialisation à 0.`);
                     currentQueueLength = 0;
                     await setAsync(queueLengthKey, 0);
                 }
 
-                let waitTime = calculateWaitTime(currentQueueLength, serviceType);
+                // Capture la longueur de la file d'attente avant d'ajouter le client
+                const queueLengthAtArrival = currentQueueLength;
+
+                const updatedQueueLength = await updateQueueLength(queueLengthKey);
+                const waitTime = calculateWaitTime(updatedQueueLength, serviceType);
 
                 if (Math.random() < 0.1 && currentQueueLength > 0) {
                     monitoringService.logClientStateUpdate(clientId, serviceType, 'abandoned');
-                    await decrAsync(queueLengthKey);
-                    console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${currentQueueLength - 1} clients.`);
+                    await updateQueueLength(queueLengthKey, 'decr');
+                    console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${updatedQueueLength - 1} clients.`);
                     return;
                 }
 
                 monitoringService.logClientArrival(clientId, serviceType, currentTime, waitTime);
 
-                // Ajout du client dans la file d'attente avec un timestamp distinct pour garantir le FIFO
-                await lpushAsync(`queue:${serviceType}`, JSON.stringify({ clientId, timestamp: currentTime }));
-                await incrAsync(queueLengthKey);
-
-                // Stocker l'heure d'arrivée du client
+                await lpushAsync(`queue:${serviceType}`, JSON.stringify({ clientId, timestamp: currentTime, queueLength: queueLengthAtArrival }));
                 await setAsync(`arrival_time:${clientId}`, currentTime);
 
-                let inProgressCount = await getAsync(inProgressKey);
-                if (inProgressCount === null) {
-                    await setAsync(inProgressKey, 0);
-                    inProgressCount = 0;
-                } else {
-                    inProgressCount = parseInt(inProgressCount, 10);
-                }
+                const inProgressKey = `in_progress:${serviceType}`;
+                const inProgressCount = parseInt(await getAsync(inProgressKey)) || 0;
 
                 if (inProgressCount === 0) {
-                    console.log(`[DEBUG] Aucun client en cours pour ${serviceType}, démarrage du prochain client.`);
                     processNextClient(serviceType);
-                } else {
-                    console.log(`[DEBUG] Clients en cours pour ${serviceType} : ${inProgressCount}`);
                 }
-
-                console.log(`[INFO] État de la file d'attente pour ${serviceType} : ${currentQueueLength + 1} clients.`);
 
             } finally {
                 activeClients--;
                 simulateClientArrival();
             }
-        }, timeUntilNextArrival * 2000);
+        }, timeUntilNextArrival);
     }
 };
 
