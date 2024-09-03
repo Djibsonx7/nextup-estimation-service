@@ -1,7 +1,7 @@
 // src/services/monitoringService.js
 // Mise à jour : Ajout du log pour le temps passé dans la file d'attente avant le début du service
 // et stockage correct du temps d'attente (waitTimeInQueue), du temps de traitement (timeSpent),
-// et de la longueur de la file d'attente (queueLength) dans MongoDB.
+// de la longueur de la file d'attente (queueLength), de l'heure de la journée (hourOfDay), du jour de la semaine (dayOfWeek) et de la minute précise de l'arrivée (minuteOfDay) dans MongoDB.
 
 const redisClient = require('../config/redisConfig');
 const QueueHistory = require('../models/queueHistoryModel');
@@ -11,7 +11,7 @@ const { promisify } = require('util');
 const getAsync = promisify(redisClient.get).bind(redisClient);
 const lrangeAsync = promisify(redisClient.lrange).bind(redisClient);
 
-const collectAndStoreData = async (serviceType, clientId, status, waitTimeInQueue, timeSpent, queueLength) => {
+const collectAndStoreData = async (serviceType, clientId, status, waitTimeInQueue, timeSpent, queueLength, hourOfDay, dayOfWeek, minuteOfDay) => {
     try {
         const queueHistory = new QueueHistory({
             queueName: serviceType,
@@ -19,6 +19,9 @@ const collectAndStoreData = async (serviceType, clientId, status, waitTimeInQueu
             waitTime: waitTimeInQueue, // Stocker le temps d'attente avant d'être servi
             timeSpent: timeSpent, // Stocker le temps de traitement
             queueLength: queueLength, // Stocker la longueur de la file d'attente
+            hourOfDay: hourOfDay, // Stocker l'heure de la journée
+            dayOfWeek: dayOfWeek, // Stocker le jour de la semaine
+            minuteOfDay: minuteOfDay, // Stocker la minute précise de l'arrivée
             status: status
         });
         await queueHistory.save();
@@ -90,10 +93,10 @@ const optimizeRealTime = async (serviceType) => {
     }
 };
 
-const logClientCompletion = async (clientId, serviceType, timeSpent, queueLength) => {
+const logClientCompletion = async (clientId, serviceType, timeSpent, queueLength, hourOfDay, dayOfWeek, minuteOfDay) => {
     console.log(`Client ${clientId} completed ${serviceType} in ${timeSpent} minutes.`);
     const waitTimeInQueue = await getAsync(`wait_time_in_queue:${clientId}`); // Récupérer le temps d'attente
-    await collectAndStoreData(serviceType, clientId, 'completed', waitTimeInQueue, timeSpent, queueLength); // Utiliser le temps d'attente et le temps de traitement
+    await collectAndStoreData(serviceType, clientId, 'completed', waitTimeInQueue, timeSpent, queueLength, hourOfDay, dayOfWeek, minuteOfDay); // Utiliser le temps d'attente et le temps de traitement
 };
 
 const logWaitTimeAdjustment = (clientId, serviceType, originalWaitTime, adjustedWaitTime) => {

@@ -1,7 +1,7 @@
 /**
  * Simulation Service
  * Ce service gère la simulation des arrivées de clients, la gestion des files d'attente et le traitement des clients.
- * Mise à jour : Capture et stockage de `queueLength` lors de l'arrivée des clients, et récupération lors du traitement des clients.
+ * Mise à jour : Capture et stockage de `queueLength`, `hourOfDay`, `dayOfWeek` et `minuteOfDay` lors de l'arrivée des clients, et récupération lors du traitement des clients.
  * Ajout : Régulation des arrivées pour éviter les arrivées simultanées.
  */
 
@@ -9,6 +9,7 @@ const redisClient = require('../config/redisConfig');
 const clientService = require('./clientService');
 const monitoringService = require('./monitoringService');
 const { promisify } = require('util');
+const moment = require('moment');
 
 // Promisify Redis methods
 const getAsync = promisify(redisClient.get).bind(redisClient);
@@ -91,7 +92,7 @@ const processNextClient = async (serviceType) => {
     const nextClientData = await rpopAsync(queueKey);
 
     if (nextClientData) {
-        const { clientId, timestamp, queueLength } = JSON.parse(nextClientData);
+        const { clientId, timestamp, queueLength, hourOfDay, dayOfWeek, minuteOfDay } = JSON.parse(nextClientData);
         console.log(`[DEBUG] Client récupéré de la file d'attente: ${clientId} pour ${serviceType}`);
 
         const arrivalTime = await getAsync(`arrival_time:${clientId}`);
@@ -106,7 +107,10 @@ const processNextClient = async (serviceType) => {
             status: 'in_progress',
             serviceStartTime,
             waitTimeInQueue: waitTimeInQueue.toFixed(2),
-            queueLength
+            queueLength,
+            hourOfDay,
+            dayOfWeek,
+            minuteOfDay
         });
 
         await lpushAsync(`wait_times:${serviceType}`, waitTimeInQueue.toFixed(2));
@@ -127,7 +131,7 @@ const processNextClient = async (serviceType) => {
                 timeSpent,
             });
 
-            await monitoringService.logClientCompletion(clientId, serviceType, timeSpent, queueLength);
+            await monitoringService.logClientCompletion(clientId, serviceType, timeSpent, queueLength, hourOfDay, dayOfWeek, minuteOfDay);
 
             await decrAsync(inProgressKey);
             setTimeout(() => {
@@ -177,6 +181,12 @@ const simulateClientArrival = async () => {
                 // Capture la longueur de la file d'attente avant d'ajouter le client
                 const queueLengthAtArrival = currentQueueLength;
 
+                // Capture l'heure de la journée, le jour de la semaine et la minute précise de l'arrivée
+                const arrivalDate = moment(currentTime);
+                const hourOfDay = arrivalDate.hours();
+                const dayOfWeek = arrivalDate.day();
+                const minuteOfDay = hourOfDay * 60 + arrivalDate.minutes();
+
                 const updatedQueueLength = await updateQueueLength(queueLengthKey);
                 const waitTime = calculateWaitTime(updatedQueueLength, serviceType);
 
@@ -189,7 +199,7 @@ const simulateClientArrival = async () => {
 
                 monitoringService.logClientArrival(clientId, serviceType, currentTime, waitTime);
 
-                await lpushAsync(`queue:${serviceType}`, JSON.stringify({ clientId, timestamp: currentTime, queueLength: queueLengthAtArrival }));
+                await lpushAsync(`queue:${serviceType}`, JSON.stringify({ clientId, timestamp: currentTime, queueLength: queueLengthAtArrival, hourOfDay, dayOfWeek, minuteOfDay }));
                 await setAsync(`arrival_time:${clientId}`, currentTime);
 
                 const inProgressKey = `in_progress:${serviceType}`;
@@ -203,6 +213,7 @@ const simulateClientArrival = async () => {
                 activeClients--;
                 simulateClientArrival();
             }
+
         }, timeUntilNextArrival);
     }
 };

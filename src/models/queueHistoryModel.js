@@ -1,5 +1,3 @@
-// src/models/queueHistoryModel.js
-
 const mongoose = require('mongoose');
 
 const queueHistorySchema = new mongoose.Schema({
@@ -13,7 +11,10 @@ const queueHistorySchema = new mongoose.Schema({
         required: true 
     }, // Statut du client (en cours, terminé, annulé, in progress, completed, abandoned)
     timeSpent: { type: Number, required: false }, // Temps passé pour le service (optionnel, ajouté lorsque le service est terminé)
-    queueLength: { type: Number, required: true } // Longueur de la file d'attente lors de l'arrivée du client
+    queueLength: { type: Number, required: true }, // Longueur de la file d'attente lors de l'arrivée du client
+    hourOfDay: { type: Number, required: true }, // Heure de la journée lors de l'arrivée du client
+    dayOfWeek: { type: Number, required: true }, // Jour de la semaine lors de l'arrivée du client
+    minuteOfDay: { type: Number, required: true } // Minute précise de l'arrivée du client
 });
 
 const QueueHistory = mongoose.model('QueueHistory', queueHistorySchema);
